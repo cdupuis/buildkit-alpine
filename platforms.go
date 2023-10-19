@@ -1,7 +1,6 @@
 package alpine
 
 import (
-	apko "chainguard.dev/apko/pkg/build/types"
 	ocispecs "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
@@ -20,7 +19,7 @@ func alpinePlatform(p ocispecs.Platform) string {
 	return v
 }
 
-func fromAlpinePlatforms(ps []apko.Architecture) []ocispecs.Platform {
+func fromAlpinePlatforms(ps []Architecture) []ocispecs.Platform {
 	out := make([]ocispecs.Platform, len(ps))
 	for i, p := range ps {
 		pp := p.ToOCIPlatform()

@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"os"
 	"path"
 	"strings"
 
-	apko "chainguard.dev/apko/pkg/build/types"
 	"github.com/containerd/containerd/platforms"
 	"github.com/moby/buildkit/client/llb"
 	"github.com/moby/buildkit/exporter/containerimage/exptypes"
@@ -16,6 +16,7 @@ import (
 	"github.com/moby/buildkit/frontend/dockerui"
 	"github.com/moby/buildkit/frontend/gateway/client"
 	"github.com/moby/buildkit/solver/pb"
+	"github.com/opencontainers/go-digest"
 	ocispecs "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
 	"gopkg.in/yaml.v3"
@@ -81,7 +82,7 @@ func Build(ctx context.Context, c client.Client) (*client.Result, error) {
 		opts := c.BuildOpts().Opts
 
 		if urls, ok := opts["build-arg:urls"]; ok && urls != "" {
-			res, img, err := installPkgs(ctx, c, self, *platform)
+			res, img, err := installPkgs(ctx, c, self, *platform, ic)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -130,10 +131,37 @@ func initRepo(c client.Client, self llb.State, p ocispecs.Platform, repos []stri
 			}),
 		llb.WithCustomNamef("[%s] add repositories and keys", platforms.Format(p)),
 	)
+
 	return rootfs
 }
 
-func buildPlatform(ctx context.Context, c client.Client, self llb.State, p ocispecs.Platform, ic *apko.ImageConfiguration) (*client.Result, error) {
+func buildBinaries(c client.Client, self llb.State, p ocispecs.Platform, ic *ImageConfiguration) llb.State {
+	rootfs := self
+	for _, b := range ic.Contents.Binaries {
+		rawURL := b.Url
+		u, err := url.Parse(rawURL)
+		f := "__unnamed__"
+		if err == nil {
+			if base := path.Base(u.Path); base != "." && base != "/" {
+				f = base
+			}
+		}
+		d, _ := digest.Parse(b.Checksum)
+		st := llb.HTTP(rawURL, llb.Filename(f), llb.Checksum(d), llb.WithCustomNamef("[%s] download binary %s", platforms.Format(p), rawURL))
+		perm := os.FileMode(744)
+		mode := &perm
+		rootfs = rootfs.File(
+			llb.Copy(st, f, b.Path, &llb.CopyInfo{
+				CreateDestPath: true,
+				Mode:           mode,
+			}),
+			llb.WithCustomNamef("[%s] copy binary %s", platforms.Format(p), b.Path),
+		)
+	}
+	return rootfs
+}
+
+func buildPlatform(ctx context.Context, c client.Client, self llb.State, p ocispecs.Platform, ic *ImageConfiguration) (*client.Result, error) {
 	rootfs := initRepo(c, self, p, ic.Contents.Repositories)
 
 	cmd := fmt.Sprintf(`sh -c "ls -l /out/etc/apk/keys && apk update --root /out && apk fetch -R --simulate --root /out --update --url %s > /urls"`, strings.Join(ic.Contents.Packages, " "))
@@ -207,7 +235,7 @@ func buildPlatform(ctx context.Context, c client.Client, self llb.State, p ocisp
 	})
 }
 
-func installPkgs(ctx context.Context, c client.Client, self llb.State, p ocispecs.Platform) (*client.Result, *image.Image, error) {
+func installPkgs(ctx context.Context, c client.Client, self llb.State, p ocispecs.Platform, ic *ImageConfiguration) (*client.Result, *image.Image, error) {
 	urls := c.BuildOpts().Opts["build-arg:urls"]
 	repos := c.BuildOpts().Opts["build-arg:repositories"]
 
@@ -230,6 +258,8 @@ func installPkgs(ctx context.Context, c client.Client, self llb.State, p ocispec
 		base := path.Base(u.Path)
 		run.AddMount("/downloads/"+base, llb.HTTP(rawURL, llb.Filename(base), llb.WithCustomNamef("[%s] download %s", platforms.Format(p), base)), llb.SourcePath(base))
 	}
+
+	rootfs = buildBinaries(c, rootfs, p, ic)
 
 	def, err := rootfs.Marshal(ctx)
 	if err != nil {
@@ -272,14 +302,14 @@ func installPkgs(ctx context.Context, c client.Client, self llb.State, p ocispec
 	return res, img, nil
 }
 
-func parse(dt []byte) (*apko.ImageConfiguration, error) {
+func parse(dt []byte) (*ImageConfiguration, error) {
 	// TODO: apko doesn't have a clean types pkg. Upstream changes or copy/paste only the definitions
-	var ic apko.ImageConfiguration
+	var ic ImageConfiguration
 	if err := yaml.Unmarshal(dt, &ic); err != nil {
 		return nil, errors.Wrap(err, "failed to parse image configuration")
 	}
-	if err := ic.Validate(); err != nil {
+	/*if err := ic.Validate(); err != nil {
 		return nil, err
-	}
+	}*/
 	return &ic, nil
 }
