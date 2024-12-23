@@ -1,0 +1,26 @@
+#syntax=cdupuis/dta-build:v1
+
+vars:
+  NODEJS_VERSION: 22.11.0-r0
+
+contents:
+  repositories:
+    - https://dl-cdn.alpinelinux.org/alpine/v3.21/main
+  packages:
+    - nodejs=${NODEJS_VERSION}
+
+annotations:
+  org.opencontainers.image.source: https://github.com/cdupuis/dta-node
+  org.opencontainers.image.version: ${NODEJS_VERSION}
+  org.opencontainers.image.licenses: https://github.com/nodejs/node?tab=License-1-ov-file#readme
+  org.opencontainers.image.description: A minimal nodejs image
+  org.opencontainers.image.url: https://nodejs.org
+
+environment:
+  PATH: /usr/sbin:/sbin:/usr/bin:/bin
+  NODE_VERSION: ${NODEJS_VERSION}
+  
+entrypoint: 
+  - node
+cmd: 
+  - version

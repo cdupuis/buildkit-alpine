@@ -103,6 +103,12 @@ func Build(ctx context.Context, c client.Client) (*client.Result, error) {
 		return nil, err
 	}
 
+	for _, p := range ui.TargetPlatforms {
+		for k, v := range ic.Annotations {
+			rb.AddMeta(exptypes.AnnotationManifestDescriptorKey(&p, k), []byte(v))
+		}
+	}
+
 	return rb.Finalize()
 }
 
@@ -135,9 +141,10 @@ func initRepo(c client.Client, self llb.State, p ocispecs.Platform, repos []stri
 	return rootfs
 }
 
-func buildBinaries(c client.Client, self llb.State, p ocispecs.Platform, ic *ImageConfiguration) llb.State {
+func buildBinaries(_ client.Client, self llb.State, p ocispecs.Platform, ic *ImageConfiguration) llb.State {
 	rootfs := self
-	for _, b := range ic.Contents.Binaries {
+	files := ic.Contents.Files[platforms.Format(p)]
+	for _, b := range files {
 		rawURL := b.Url
 		u, err := url.Parse(rawURL)
 		f := "__unnamed__"
@@ -147,15 +154,20 @@ func buildBinaries(c client.Client, self llb.State, p ocispecs.Platform, ic *Ima
 			}
 		}
 		d, _ := digest.Parse(b.Checksum)
-		st := llb.HTTP(rawURL, llb.Filename(f), llb.Checksum(d), llb.WithCustomNamef("[%s] download binary %s", platforms.Format(p), rawURL))
-		perm := os.FileMode(744)
+		st := llb.HTTP(rawURL, llb.Filename(f), llb.Checksum(d), llb.WithCustomNamef("[%s] download file %s", platforms.Format(p), rawURL))
+		perm := os.FileMode(0744)
 		mode := &perm
+		unpack := false
+		if strings.HasSuffix(f, ".tar.gz") || strings.HasSuffix(f, ".tgz") {
+			unpack = true
+		}
 		rootfs = rootfs.File(
 			llb.Copy(st, f, b.Path, &llb.CopyInfo{
 				CreateDestPath: true,
 				Mode:           mode,
+				AttemptUnpack:  unpack,
 			}),
-			llb.WithCustomNamef("[%s] copy binary %s", platforms.Format(p), b.Path),
+			llb.WithCustomNamef("[%s] copy file %s", platforms.Format(p), b.Path),
 		)
 	}
 	return rootfs
@@ -164,7 +176,13 @@ func buildBinaries(c client.Client, self llb.State, p ocispecs.Platform, ic *Ima
 func buildPlatform(ctx context.Context, c client.Client, self llb.State, p ocispecs.Platform, ic *ImageConfiguration) (*client.Result, error) {
 	rootfs := initRepo(c, self, p, ic.Contents.Repositories)
 
-	cmd := fmt.Sprintf(`sh -c "ls -l /out/etc/apk/keys && apk update --root /out && apk fetch -R --simulate --root /out --update --url %s > /urls"`, strings.Join(ic.Contents.Packages, " "))
+	// Trim version number of
+	packages := make([]string, len(ic.Contents.Packages))
+	for i, pkg := range ic.Contents.Packages {
+		packages[i] = strings.Split(pkg, "=")[0]
+	}
+
+	cmd := fmt.Sprintf(`sh -c "ls -l /out/etc/apk/keys && apk update --root /out && apk fetch -R --simulate --root /out --update --url %s > /urls"`, strings.Join(packages, " "))
 
 	ro := []llb.RunOption{llb.Shlex(cmd), llb.WithCustomNamef("[%s] fetch package locations", platforms.Format(p))}
 	if isIgnoreCache(c) {
@@ -190,6 +208,17 @@ func buildPlatform(ctx context.Context, c client.Client, self llb.State, p ocisp
 		return nil, err
 	}
 
+	// Verify that the correct package versions are installed
+	for _, pkg := range ic.Contents.Packages {
+		if strings.Contains(pkg, "=") {
+			alpinePkg := strings.Replace(pkg, "=", "-", 1)
+			if !strings.Contains(string(dt), alpinePkg) {
+				return nil, errors.Errorf("package %s not installed", pkg)
+			}
+		}
+	}
+
+	// TODO: this is a hack to get the urls from the solve result
 	var urls []string
 	for _, u := range strings.Split(string(dt), "\n") {
 		u = strings.TrimSpace(u)
@@ -208,8 +237,8 @@ func buildPlatform(ctx context.Context, c client.Client, self llb.State, p ocisp
 	opts["build-arg:urls"] = strings.Join(urls, ",")
 	opts["build-arg:repositories"] = strings.Join(ic.Contents.Repositories, ",")
 
-	opts["build-arg:cmd"] = ic.Cmd
-	opts["build-arg:entrypoint"] = ic.Entrypoint.Command // TODO
+	opts["build-arg:cmd"] = strings.Join(ic.Cmd, "$$,$$")
+	opts["build-arg:entrypoint"] = strings.Join(ic.Entrypoint, "$$,$$")
 	opts["build-arg:workdir"] = ic.WorkDir
 	for k, v := range ic.Environment {
 		opts["build-arg:env:"+k] = v
@@ -286,10 +315,10 @@ func installPkgs(ctx context.Context, c client.Client, self llb.State, p ocispec
 			continue
 		}
 		if k == "build-arg:cmd" && v != "" {
-			img.Config.Cmd = strings.Split(v, " ")
+			img.Config.Cmd = strings.Split(v, "$$,$$")
 		}
 		if k == "build-arg:entrypoint" && v != "" {
-			img.Config.Entrypoint = strings.Split(v, " ")
+			img.Config.Entrypoint = strings.Split(v, "$$,$$")
 		}
 		if k == "build-arg:workdir" && v != "" {
 			img.Config.WorkingDir = v
@@ -303,13 +332,24 @@ func installPkgs(ctx context.Context, c client.Client, self llb.State, p ocispec
 }
 
 func parse(dt []byte) (*ImageConfiguration, error) {
-	// TODO: apko doesn't have a clean types pkg. Upstream changes or copy/paste only the definitions
 	var ic ImageConfiguration
+	// 1. Parse the image configuration to get the vars
 	if err := yaml.Unmarshal(dt, &ic); err != nil {
 		return nil, errors.Wrap(err, "failed to parse image configuration")
 	}
-	/*if err := ic.Validate(); err != nil {
-		return nil, err
-	}*/
+	if ic.Vars == nil {
+		return &ic, nil
+	}
+
+	// 2. Replace the vars in the image configuration
+	c := string(dt)
+	for k, v := range ic.Vars {
+		c = strings.ReplaceAll(c, fmt.Sprintf("${%s}", k), v)
+	}
+
+	if err := yaml.Unmarshal([]byte(c), &ic); err != nil {
+		return nil, errors.Wrap(err, "failed to parse image configuration")
+	}
+
 	return &ic, nil
 }

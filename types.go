@@ -40,27 +40,21 @@ type OSRelease struct {
 }
 
 type ImageConfiguration struct {
+	Vars     map[string]string `yaml:"vars,omitempty"`
 	Contents struct {
 		Repositories []string `yaml:"repositories,omitempty"`
 		Keyring      []string `yaml:"keyring,omitempty"`
 		Packages     []string `yaml:"packages,omitempty"`
-		Binaries     []struct {
+		Files        map[string][]struct {
 			Url      string `yaml:"url,omitempty"`
 			Checksum string `yaml:"checksum,omitempty"`
 			Path     string `yaml:"path,omitempty"`
-		} `yaml:"binaries,omitempty"`
+		} `yaml:"files,omitempty"`
 	} `yaml:"contents,omitempty"`
-	Entrypoint struct {
-		Type          string
-		Command       string
-		ShellFragment string `yaml:"shell-fragment"`
-
-		// TBD: presently a map of service names and the command to run
-		Services map[interface{}]interface{}
-	} `yaml:"entrypoint,omitempty"`
-	Cmd      string `yaml:"cmd,omitempty"`
-	WorkDir  string `yaml:"work-dir,omitempty"`
-	Accounts struct {
+	Entrypoint []string `yaml:"entrypoint,omitempty"`
+	Cmd        []string `yaml:"cmd,omitempty"`
+	WorkDir    string   `yaml:"work-dir,omitempty"`
+	Accounts   struct {
 		RunAs  string `yaml:"run-as"`
 		Users  []User
 		Groups []Group
