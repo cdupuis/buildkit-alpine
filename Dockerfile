@@ -11,7 +11,7 @@ ARG TARGETPLATFORM
 RUN --mount=target=. --mount=target=/root/.cache,type=cache \
   CGO_ENABLED=0 xx-go build -o /out/bkabuild ./cmd/bkabuild && xx-verify --static /out/bkabuild
   
-FROM alpine:3.21
+FROM alpine:3.20
 COPY --from=build /out/bkabuild /bin/bkabuild
 LABEL moby.buildkit.frontend.network.none="true"
 LABEL moby.buildkit.frontend.caps="moby.buildkit.frontend.contexts,moby.buildkit.frontend.inputs"

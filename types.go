@@ -9,15 +9,15 @@ import (
 )
 
 type User struct {
-	UserName string
-	UID      uint32
-	GID      uint32
+	UserName string `yaml:"name"`
+	UID      uint32 `yaml:"uid"`
+	GID      uint32 `yaml:"gid"`
 }
 
 type Group struct {
-	GroupName string
-	GID       uint32
-	Members   []string
+	GroupName string   `yaml:"name"`
+	GID       uint32   `yaml:"gid"`
+	Members   []string `yaml:"members,omitempty"`
 }
 
 type PathMutation struct {
@@ -31,8 +31,8 @@ type PathMutation struct {
 }
 
 type OSRelease struct {
-	Name         string
-	ID           string
+	Name         string `yaml:"name"`
+	ID           string `yaml:"id"`
 	VersionID    string `yaml:"version-id"`
 	PrettyName   string `yaml:"pretty-name"`
 	HomeURL      string `yaml:"home-url"`
@@ -46,23 +46,26 @@ type ImageConfiguration struct {
 		Keyring      []string `yaml:"keyring,omitempty"`
 		Packages     []string `yaml:"packages,omitempty"`
 		Files        map[string][]struct {
-			Url      string `yaml:"url,omitempty"`
-			Checksum string `yaml:"checksum,omitempty"`
-			Path     string `yaml:"path,omitempty"`
+			Url      string   `yaml:"url,omitempty"`
+			Checksum string   `yaml:"checksum,omitempty"`
+			Path     string   `yaml:"path,omitempty"`
+			Includes []string `yaml:"includes,omitempty"`
+			Excludes []string `yaml:"excludes,omitempty"`
 		} `yaml:"files,omitempty"`
 	} `yaml:"contents,omitempty"`
 	Entrypoint []string `yaml:"entrypoint,omitempty"`
 	Cmd        []string `yaml:"cmd,omitempty"`
 	WorkDir    string   `yaml:"work-dir,omitempty"`
 	Accounts   struct {
-		RunAs  string `yaml:"run-as"`
-		Users  []User
-		Groups []Group
+		RunAs  string  `yaml:"run-as"`
+		Users  []User  `yaml:"users,omitempty"`
+		Groups []Group `yaml:"groups,omitempty"`
+		Root   bool    `yaml:"root,omitempty"`
 	} `yaml:"accounts,omitempty"`
 	Archs       []Architecture    `yaml:"archs,omitempty"`
 	Environment map[string]string `yaml:"environment,omitempty"`
 	Paths       []PathMutation    `yaml:"paths,omitempty"`
-	OSRelease   OSRelease         `yaml:"os-release,omitempty"`
+	OSRelease   *OSRelease        `yaml:"os-release,omitempty"`
 	VCSUrl      string            `yaml:"vcs-url,omitempty"`
 	Annotations map[string]string `yaml:"annotations,omitempty"`
 	Include     string            `yaml:"include,omitempty"`
